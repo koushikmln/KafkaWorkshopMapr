@@ -1,3 +1,5 @@
+import java.util.{Calendar, Date}
+
 import com.typesafe.config.ConfigFactory
 import kafka.serializer.StringDecoder
 import org.apache.spark.SparkConf
@@ -13,7 +15,9 @@ import org.apache.hadoop.hbase.util.Bytes
 import org.apache.hadoop.hbase.{HBaseConfiguration, TableName}
 import org.apache.hadoop.conf.Configuration
 
-object SiteTraffic {
+import scala.util.parsing.json.JSON
+
+object CountryVisitCount {
 
 
   def getHbaseConnection(): Connection ={
@@ -28,27 +32,25 @@ object SiteTraffic {
     connection
   }
 
-  def insertOrUpdateMetrics(rowId: String, data: String): Unit = {
+  def insertOrUpdateMetrics(rowId: String, country: String, count: Int): Unit = {
     //Hbase Metadata
     val columnFamily1 = "metrics"
-    val columnName11 = "last_timestamp"
-
     val connection = getHbaseConnection()
 
-    val table = connection.getTable(TableName.valueOf("/user/mapr/log_data"))
-    val row_get = new Get(Bytes.toBytes(rowId))
+    val table = connection.getTable(TableName.valueOf("/user/mapr/country_count_stream"))
+    val row_get = new Get(Bytes.toBytes(rowId.toString))
     //Insert Into Table
     val result = table.get(row_get)
-    if (result.isEmpty) {
-      val row_put = new Put(Bytes.toBytes(rowId))
-      row_put.addColumn(Bytes.toBytes(columnFamily1),Bytes.toBytes(columnName11),Bytes.toBytes(data))
-      table.put(row_put)
+    val value = result.getValue(Bytes.toBytes(columnFamily1),Bytes.toBytes(country))
+
+    val rowPut = new Put(Bytes.toBytes(rowId.toString))
+    if (value == null) {
+      rowPut.addColumn(Bytes.toBytes(columnFamily1),Bytes.toBytes(country),Bytes.toBytes(count.toString))
     } else {
-      // Same Logic right now
-      val row_put = new Put(Bytes.toBytes(rowId))
-      row_put.addColumn(Bytes.toBytes(columnFamily1),Bytes.toBytes(columnName11),Bytes.toBytes(data))
-      table.put(row_put)
+      val newCount = Bytes.toString(value).toInt + count
+      rowPut.addColumn(Bytes.toBytes(columnFamily1),Bytes.toBytes(country),Bytes.toBytes(newCount.toString))
     }
+    table.put(rowPut)
     connection.close()
   }
 
@@ -56,9 +58,10 @@ object SiteTraffic {
     val conf = ConfigFactory.load
     val envProps = conf.getConfig(args(0))
     val sparkConf = new SparkConf().setMaster("yarn").setAppName("SiteTraffic")
-    val streamingContext = new StreamingContext(sparkConf, Seconds(1))
-    val topicsSet = Set("Kafka-Testing")
-
+    val streamingContext = new StreamingContext(sparkConf, Seconds(envProps.getInt("window")))
+    val topicsSet = Set("retail_logs")
+    val now = Calendar.getInstance().getTime()
+    val timestamp = streamingContext.sparkContext.broadcast(now)
     val kafkaParams = Map[String, Object](
       "bootstrap.servers" -> envProps.getString("bootstrap.server"),
       "key.deserializer" -> classOf[StringDeserializer],
@@ -74,17 +77,18 @@ object SiteTraffic {
       Subscribe[String, String](topicsSet, kafkaParams)
     ).map(record => record.value)
 
-    val ipList = logData.map(line => {
-      val ip = line.split(" ")(0)
-      val timestamp = line.split(" ")(3).replace("[","").replace("]","")
-      ip + "," + timestamp
-    })
+    val countryList = logData.map(line => {
+      val json: Option[Any] = JSON.parseFull(line)
+      val map = json.get.asInstanceOf[Map[String, Any]]
+      val geoIpMap = map.get("geoip").get.asInstanceOf[Map[String, Any]]
+      val country = geoIpMap.get("country_name").getOrElse("ALIEN").asInstanceOf[String]
+      val timestamp = map.get("timestamp").get.asInstanceOf[String]
+      ((timestamp , country), 1)
+    }).reduceByKey(_ + _)
 
-    ipList.saveAsTextFiles("/user/mapr/kafka-testing/log")
-
-    ipList.foreachRDD(ips =>{
-      ips.foreach(ip =>{
-        insertOrUpdateMetrics(ip.split(",")(0), ip.split(",")(1))
+    countryList.foreachRDD(countries =>{
+      countries.foreach(country =>{
+        insertOrUpdateMetrics(country._1._1, country._1._2, country._2)
       })
     })
 

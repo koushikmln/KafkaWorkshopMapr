@@ -13,7 +13,7 @@ import org.apache.hadoop.hbase.util.Bytes
 import org.apache.hadoop.hbase.{HBaseConfiguration, TableName}
 import org.apache.hadoop.conf.Configuration
 
-object SiteTraffic {
+object SiteVisitCount {
 
 
   def getHbaseConnection(): Connection ={
@@ -28,25 +28,26 @@ object SiteTraffic {
     connection
   }
 
-  def insertOrUpdateMetrics(rowId: String, data: String): Unit = {
+  def insertOrUpdateMetrics(rowId: String, data: Int): Unit = {
     //Hbase Metadata
     val columnFamily1 = "metrics"
     val columnName11 = "last_timestamp"
-
+    val columnName12 = "count"
     val connection = getHbaseConnection()
 
     val table = connection.getTable(TableName.valueOf("/user/mapr/log_data"))
     val row_get = new Get(Bytes.toBytes(rowId))
     //Insert Into Table
     val result = table.get(row_get)
-    if (result.isEmpty) {
+    val value = result.getValue(Bytes.toBytes(columnFamily1),Bytes.toBytes(columnName12))
+    if (value == null) {
       val row_put = new Put(Bytes.toBytes(rowId))
-      row_put.addColumn(Bytes.toBytes(columnFamily1),Bytes.toBytes(columnName11),Bytes.toBytes(data))
+      row_put.addColumn(Bytes.toBytes(columnFamily1),Bytes.toBytes(columnName12),Bytes.toBytes(data.toString))
       table.put(row_put)
     } else {
-      // Same Logic right now
+      val count = Bytes.toString(value).toInt + data
       val row_put = new Put(Bytes.toBytes(rowId))
-      row_put.addColumn(Bytes.toBytes(columnFamily1),Bytes.toBytes(columnName11),Bytes.toBytes(data))
+      row_put.addColumn(Bytes.toBytes(columnFamily1),Bytes.toBytes(columnName12),Bytes.toBytes(count.toString))
       table.put(row_put)
     }
     connection.close()
@@ -76,15 +77,14 @@ object SiteTraffic {
 
     val ipList = logData.map(line => {
       val ip = line.split(" ")(0)
-      val timestamp = line.split(" ")(3).replace("[","").replace("]","")
-      ip + "," + timestamp
-    })
+      (ip, 1)
+    }).reduceByKey(_ + _)
 
-    ipList.saveAsTextFiles("/user/mapr/kafka-testing/log")
+    // ipList.saveAsTextFiles("/user/mapr/kafka-testing/log")
 
     ipList.foreachRDD(ips =>{
       ips.foreach(ip =>{
-        insertOrUpdateMetrics(ip.split(",")(0), ip.split(",")(1))
+        insertOrUpdateMetrics(ip._1, ip._2)
       })
     })
 

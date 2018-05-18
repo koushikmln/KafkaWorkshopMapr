@@ -1,10 +1,14 @@
-import java.util.{Properties}
-import org.apache.kafka.clients.producer.{ProducerConfig, KafkaProducer, ProducerRecord}
+import java.util.Properties
 
-object ScalaProducerExample {
+import com.typesafe.config.ConfigFactory
+import org.apache.kafka.clients.producer.{KafkaProducer, ProducerConfig, ProducerRecord}
+
+object KafkaProducerExample {
   def main(args: Array[String]): Unit = {
+    val conf = ConfigFactory.load
+    val envProps = conf.getConfig(args(0))
     val props = new Properties()
-    props.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, "rm01.itversity.com:6667,nn02.itversity.com:6667,nn01.itversity.com:6667")
+    props.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, envProps.getString("bootstrap.server"))
     props.put(ProducerConfig.CLIENT_ID_CONFIG, "ScalaProducerExample")
     props.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, "org.apache.kafka.common.serialization.StringSerializer")
     props.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, "org.apache.kafka.common.serialization.StringSerializer")

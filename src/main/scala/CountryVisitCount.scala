@@ -1,6 +1,6 @@
 import java.util.{Calendar, Date}
 
-import com.typesafe.config.ConfigFactory
+import com.typesafe.config.{Config, ConfigFactory}
 import kafka.serializer.StringDecoder
 import org.apache.spark.SparkConf
 import org.apache.spark.streaming.dstream.DStream
@@ -20,11 +20,11 @@ import scala.util.parsing.json.JSON
 object CountryVisitCount {
 
 
-  def getHbaseConnection(): Connection ={
+  def getHbaseConnection(config: Config): Connection ={
     //Create Hbase Configuration Object
     val hBaseConf: Configuration = HBaseConfiguration.create()
-    hBaseConf.set("hbase.zookeeper.quorum","mapr02.itversity.com,mapr03.itversity.com,mapr04.itversity.com")
-    hBaseConf.set("hbase.zookeeper.property.clientPort","5181")
+    hBaseConf.set("hbase.zookeeper.quorum", config.getString("zookeeper.quorum"))
+    hBaseConf.set("hbase.zookeeper.property.clientPort", config.getString("zookeeper.port"))
     hBaseConf.set("zookeeper.znode.parent","/hbase-unsecure")
     hBaseConf.set("hbase.cluster.distributed","true")
     //Establish Connection
@@ -32,10 +32,10 @@ object CountryVisitCount {
     connection
   }
 
-  def insertOrUpdateMetrics(rowId: String, country: String, count: Int): Unit = {
+  def insertOrUpdateMetrics(rowId: String, country: String, count: Int , envProps: Config): Unit = {
     //Hbase Metadata
     val columnFamily1 = "metrics"
-    val connection = getHbaseConnection()
+    val connection = getHbaseConnection(envProps)
 
     val table = connection.getTable(TableName.valueOf("/user/mapr/country_count_stream"))
     val row_get = new Get(Bytes.toBytes(rowId.toString))
@@ -56,9 +56,10 @@ object CountryVisitCount {
 
   def main(args: Array[String]): Unit = {
     val conf = ConfigFactory.load
-    val envProps = conf.getConfig(args(0))
+    val envProps: Config = conf.getConfig(args(0))
     val sparkConf = new SparkConf().setMaster("yarn").setAppName("SiteTraffic")
     val streamingContext = new StreamingContext(sparkConf, Seconds(envProps.getInt("window")))
+    val broadcastConfig = streamingContext.sparkContext.broadcast(envProps)
     val topicsSet = Set("retail_logs")
     val now = Calendar.getInstance().getTime()
     val timestamp = streamingContext.sparkContext.broadcast(now)
@@ -82,13 +83,13 @@ object CountryVisitCount {
       val map = json.get.asInstanceOf[Map[String, Any]]
       val geoIpMap = map.get("geoip").get.asInstanceOf[Map[String, Any]]
       val country = geoIpMap.get("country_name").getOrElse("ALIEN").asInstanceOf[String]
-      val timestamp = map.get("timestamp").get.asInstanceOf[String]
+      val timestamp = map.get("rounded_timestamp").get.asInstanceOf[String]
       ((timestamp , country), 1)
     }).reduceByKey(_ + _)
 
     countryList.foreachRDD(countries =>{
       countries.foreach(country =>{
-        insertOrUpdateMetrics(country._1._1, country._1._2, country._2)
+        insertOrUpdateMetrics(country._1._1, country._1._2, country._2, broadcastConfig.value)
       })
     })
 

@@ -1,7 +1,7 @@
 import java.util.{Collections, Properties}
 
 import com.typesafe.config.ConfigFactory
-import org.apache.kafka.clients.consumer.{ConsumerConfig, KafkaConsumer}
+import org.apache.kafka.clients.consumer.{ConsumerConfig, ConsumerRecord, KafkaConsumer}
 
 import scala.collection.JavaConversions._
 
